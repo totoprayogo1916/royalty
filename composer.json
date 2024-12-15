@@ -1,0 +1,30 @@
+{
+    "name": "esoftdream/royalty",
+    "description": "Plugin Royalty",
+    "type": "library",
+    "license": "proprietary",
+    "authors": [
+        {
+            "name": "Toto",
+            "email": "totoprayogo1916@gmail.com"
+        }
+    ],
+    "require": {
+        "codeigniter4/framework": "^4"
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true,
+    "autoload": {
+        "psr-4": {
+            "Esoftdream\\Royalty\\": "src/"
+        },
+        "exclude-from-classmap": [
+            "**/Database/Migrations/**"
+        ]
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "preferred-install": "dist",
+        "sort-packages": true
+    }
+}
