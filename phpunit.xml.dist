@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:noNamespaceSchemaLocation="https://schema.phpunit.de/10.5/phpunit.xsd"
+         bootstrap="vendor/codeigniter4/framework/system/Test/bootstrap.php"
+         backupGlobals="false"
+         colors="true"
+         executionOrder="default"
+         failOnRisky="true"
+         failOnWarning="true"
+         stopOnError="false"
+         stopOnFailure="false">
+
+    <testsuites>
+        <testsuite name="Royalty IT Test Suite">
+            <directory>./tests</directory>
+        </testsuite>
+    </testsuites>
+
+    <php>
+        <server name="app.baseURL" value="https://example.com/"/>
+        <const name="HOMEPATH" value="./"/>
+        <const name="CONFIGPATH" value="vendor/codeigniter4/framework/app/Config/"/>
+        <const name="PUBLICPATH" value="./public/"/>
+    </php>
+
+    <source>
+        <include>
+            <directory suffix=".php">./src/</directory>
+        </include>
+    </source>
+</phpunit>

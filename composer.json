@@ -13,7 +13,8 @@
         "php": "^8.1"
     },
     "require-dev": {
-        "codeigniter4/framework": "^4.0"
+        "codeigniter4/framework": "^4.0,<4.6.0",
+        "phpunit/phpunit": "^10.0"
     },
     "minimum-stability": "stable",
     "prefer-stable": true,
@@ -25,9 +26,22 @@
             "**/Database/Migrations/**"
         ]
     },
+    "autoload-dev": {
+        "psr-4": {
+            "Esoftdream\\Royalty\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
     "config": {
         "optimize-autoloader": true,
         "preferred-install": "dist",
-        "sort-packages": true
+        "sort-packages": true,
+        "policy": {
+            "advisories": {
+                "block": false
+            }
+        }
     }
 }
