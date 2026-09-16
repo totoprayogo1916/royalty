@@ -2,6 +2,7 @@
 
 namespace Esoftdream\Royalty\Tests\Unit;
 
+use CodeIgniter\Database\BaseConnection;
 use Esoftdream\Royalty\Models\RoyaltyModel;
 use PHPUnit\Framework\TestCase;
 
@@ -9,7 +10,8 @@ class RoyaltyModelTest extends TestCase
 {
     public function testModelHasCorrectTableNameAndPrimaryKey()
     {
-        $model = new RoyaltyModel();
+        $dbMock = $this->createMock(BaseConnection::class);
+        $model  = new RoyaltyModel($dbMock);
 
         $refClass = new \ReflectionClass($model);
 
@@ -24,9 +26,10 @@ class RoyaltyModelTest extends TestCase
 
     public function testModelHasAllowedFieldsConfigured()
     {
-        $model = new RoyaltyModel();
+        $dbMock = $this->createMock(BaseConnection::class);
+        $model  = new RoyaltyModel($dbMock);
 
-        $refClass = new \ReflectionClass($model);
+        $refClass          = new \ReflectionClass($model);
         $allowedFieldsProp = $refClass->getProperty('allowedFields');
         $allowedFieldsProp->setAccessible(true);
 

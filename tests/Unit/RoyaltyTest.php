@@ -2,11 +2,11 @@
 
 namespace Esoftdream\Royalty\Tests\Unit;
 
-use CodeIgniter\Database\BaseConnection;
-
 use CodeIgniter\Database\BaseBuilder;
-use Esoftdream\Royalty\Royalty;
+use CodeIgniter\Database\BaseConnection;
+use CodeIgniter\Database\ResultInterface;
 use Esoftdream\Royalty\Libraries\Royalty as RoyaltyLibrary;
+use Esoftdream\Royalty\Royalty;
 use PHPUnit\Framework\TestCase;
 
 class RoyaltyTest extends TestCase
@@ -38,16 +38,18 @@ class RoyaltyTest extends TestCase
 
     public function testSnakeCaseAliasesCallCamelCaseMethods()
     {
-        $dbMock = $this->createMock(BaseConnection::class);
-
+        $dbMock     = $this->createMock(BaseConnection::class);
         $builderMock = $this->createMock(BaseBuilder::class);
+        $resultMock  = $this->createMock(ResultInterface::class);
+
+        $resultMock->method('getRow')->willReturn(null);
+
         $builderMock->method('set')->willReturnSelf();
         $builderMock->method('where')->willReturnSelf();
         $builderMock->method('update')->willReturn(true);
         $builderMock->method('select')->willReturnSelf();
         $builderMock->method('orderBy')->willReturnSelf();
-        $builderMock->method('get')->willReturnSelf();
-        $builderMock->method('getRow')->willReturn(null);
+        $builderMock->method('get')->willReturn($resultMock);
         $builderMock->method('insert')->willReturn(true);
 
         $dbMock->method('table')->willReturn($builderMock);
