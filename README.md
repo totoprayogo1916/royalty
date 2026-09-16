@@ -2,7 +2,10 @@
 
 Library PHP / CodeIgniter 4 untuk pengelolaan perhitungan **Royalty IT**, pelunasan tagihan bulanan (top-up deposit), akumulasi fee, serta penyesuaian otomatis batas minimal royalty bulanan (cron adjustment).
 
+![Tests](https://github.com/esoftdream/royalty/workflows/Tests/badge.svg)
+
 ---
+
 
 ## 📦 Instalasi
 
@@ -154,6 +157,23 @@ $years = $model->getAvailableYears();
 
 ---
 
+## 🧪 Testing
+
+Jalankan pengujian unit (PHPUnit) dengan perintah:
+
+```bash
+composer test
+```
+
+atau langsung menggunakan binary PHPUnit:
+
+```bash
+vendor/bin/phpunit
+```
+
+---
+
 ## 📋 Lisensi & Hak Cipta
 
 Proprietary Code - Esoftdream
+
