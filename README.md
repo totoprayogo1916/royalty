@@ -60,6 +60,26 @@ Anda dapat mengubah batas minimal royalty bulanan (Default: `500000`) melalui:
 2. **File Config Project** (opsional):
    Buat file `app/Config/Royalty.php` yang meng-extend `Esoftdream\Royalty\Config\Royalty`.
 
+3. **Minimal Royalty Dinamis (Per Bulan / Berbasis Kriteria Omset)**:
+   ```php
+   // Cara A: Mengubah nominal minimal royalty secara eksplisit
+   $royalty->setMinimumRoyalty(5000000);
+
+   // Cara B: Menggunakan Callback Resolver (Otomatis menyesuaikan kriteria omset)
+   $royalty->setMinimumRoyaltyResolver(function (string $date, BaseConnection $db) {
+       $month = date('m', strtotime($date));
+       // Contoh: Jika bulan September, minimal royalty dinaikkan jadi 5.000.000
+       if ($month === '09') {
+           return 5000000;
+       }
+       return 4000000; // Default Rp 4.000.000
+   });
+
+   // Cara C: Override langsung saat pemanggilan method
+   $royalty->updateRoyalty($nominalFee, 5000000);
+   $royalty->processAdjustment($db, 5000000);
+   ```
+
 ---
 
 ## 🚀 Penggunaan Library
