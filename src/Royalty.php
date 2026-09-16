@@ -16,6 +16,8 @@ class Royalty
 {
     private BaseConnection $db;
     private int $minRoyalty;
+    /** @var callable|null */
+    private $minRoyaltyResolver = null;
     private string $datetime;
     private string $date;
     private string $month;
@@ -59,13 +61,62 @@ class Royalty
     }
 
     /**
+     * Set dynamic minimum royalty value
+     */
+    public function setMinimumRoyalty(int $minRoyalty): self
+    {
+        if ($minRoyalty < 0) {
+            throw new InvalidArgumentException('Minimum royalty fee tidak boleh negatif.');
+        }
+        $this->minRoyalty = $minRoyalty;
+
+        return $this;
+    }
+
+    /**
+     * Set a dynamic resolver callback to calculate minimum royalty based on custom business criteria.
+     * Callback signature: function(string $date, BaseConnection $db): int
+     */
+    public function setMinimumRoyaltyResolver(callable $resolver): self
+    {
+        $this->minRoyaltyResolver = $resolver;
+
+        return $this;
+    }
+
+    /**
+     * Resolve minimum royalty for a given date or custom override
+     */
+    public function resolveMinimumRoyalty(?string $date = null, ?int $customMinRoyalty = null): int
+    {
+        if ($customMinRoyalty !== null) {
+            if ($customMinRoyalty < 0) {
+                throw new InvalidArgumentException('Minimum royalty fee tidak boleh negatif.');
+            }
+
+            return $customMinRoyalty;
+        }
+
+        if (is_callable($this->minRoyaltyResolver)) {
+            $resolved = call_user_func($this->minRoyaltyResolver, $date ?? $this->date, $this->db);
+            if (is_numeric($resolved) && (int) $resolved >= 0) {
+                return (int) $resolved;
+            }
+        }
+
+        return $this->minRoyalty;
+    }
+
+    /**
      * Update/Accumulate royalty fee
      */
-    public function updateRoyalty(int|float $royalty): bool|int
+    public function updateRoyalty(int|float $royalty, ?int $customMinRoyalty = null): bool|int
     {
         if ($royalty < 0) {
             throw new InvalidArgumentException('Nominal royalty fee tidak boleh negatif.');
         }
+
+        $effectiveMinRoyalty = $this->resolveMinimumRoyalty($this->date, $customMinRoyalty);
 
         try {
             $this->db->transBegin();
@@ -101,14 +152,14 @@ class Royalty
             $log = $this->db->query($sqlLog)->getRow();
 
             if ($log) {
-                $this->updateMonthlyLog($royalty, $balance, $log);
+                $this->updateMonthlyLog($royalty, $balance, $log, $effectiveMinRoyalty);
                 $this->db->transCommit();
 
                 $this->triggerEvent('royalty_updated', ['amount' => $royalty, 'datetime' => $this->datetime]);
                 return true;
             }
 
-            $insertId = $this->insertMonthlyLog($royalty, $balance);
+            $insertId = $this->insertMonthlyLog($royalty, $balance, $effectiveMinRoyalty);
             $this->db->transCommit();
 
             $this->triggerEvent('royalty_updated', ['amount' => $royalty, 'datetime' => $this->datetime, 'log_id' => $insertId]);
@@ -125,19 +176,21 @@ class Royalty
     /**
      * Snake_case alias for updateRoyalty
      */
-    public function update_royalty(int|float $royalty): bool|int
+    public function update_royalty(int|float $royalty, ?int $customMinRoyalty = null): bool|int
     {
-        return $this->updateRoyalty($royalty);
+        return $this->updateRoyalty($royalty, $customMinRoyalty);
     }
 
-    private function insertMonthlyLog(int|float $royalty, int|float $balance): int
+    private function insertMonthlyLog(int|float $royalty, int|float $balance, ?int $minRoyalty = null): int
     {
+        $min = $minRoyalty ?? $this->minRoyalty;
+
         $dataInsert = [
-            'royalty_fee_log_monthly_balance'    => $royalty > $this->minRoyalty ? ($balance - $royalty) : ($balance - $this->minRoyalty),
+            'royalty_fee_log_monthly_balance'    => $royalty > $min ? ($balance - $royalty) : ($balance - $min),
             'royalty_fee_log_monthly_year_month' => $this->date,
             'royalty_fee_log_monthly_value_out'  => $royalty,
-            'royalty_fee_log_monthly_bill'       => $royalty > $this->minRoyalty ? $royalty : $this->minRoyalty,
-            'royalty_fee_log_monthly_min'        => $this->minRoyalty,
+            'royalty_fee_log_monthly_bill'       => $royalty > $min ? $royalty : $min,
+            'royalty_fee_log_monthly_min'        => $min,
         ];
 
         $dataInsert['royalty_fee_log_monthly_paid']   = $balance > 0 ? ($dataInsert['royalty_fee_log_monthly_balance'] >= 0 ? $dataInsert['royalty_fee_log_monthly_bill'] : $balance) : 0;
@@ -153,20 +206,22 @@ class Royalty
         return (int) $this->db->insertID();
     }
 
-    private function updateMonthlyLog(int|float $royalty, int|float $balance, object $log): void
+    private function updateMonthlyLog(int|float $royalty, int|float $balance, object $log, ?int $minRoyalty = null): void
     {
-        if ($log->royalty_fee_log_monthly_value_out > $this->minRoyalty) {
+        $min = $minRoyalty ?? $this->minRoyalty;
+
+        if ($log->royalty_fee_log_monthly_value_out > $min) {
             $newBill = $log->royalty_fee_log_monthly_value_out + $royalty;
             $newOut  = $log->royalty_fee_log_monthly_value_out + $royalty;
             $paid    = $balance <= 0 ? $log->royalty_fee_log_monthly_paid : ($royalty < $balance ? $log->royalty_fee_log_monthly_paid + $royalty : $log->royalty_fee_log_monthly_paid + $balance);
             $unpaid  = $newBill - $paid;
             $balance -= $royalty;
-        } elseif (($log->royalty_fee_log_monthly_value_out + $royalty) > $this->minRoyalty) {
+        } elseif (($log->royalty_fee_log_monthly_value_out + $royalty) > $min) {
             $newBill = $log->royalty_fee_log_monthly_value_out + $royalty;
             $newOut  = $log->royalty_fee_log_monthly_value_out + $royalty;
             $paid    = $balance <= 0 ? $log->royalty_fee_log_monthly_paid : ($royalty < $balance ? $log->royalty_fee_log_monthly_paid + $royalty : $log->royalty_fee_log_monthly_paid + $balance);
             $unpaid  = $newBill - $paid;
-            $balance -= (($log->royalty_fee_log_monthly_value_out + $royalty) - $this->minRoyalty);
+            $balance -= (($log->royalty_fee_log_monthly_value_out + $royalty) - $min);
         } else {
             $newBill = $log->royalty_fee_log_monthly_bill;
             $newOut  = $log->royalty_fee_log_monthly_value_out + $royalty;
@@ -183,6 +238,7 @@ class Royalty
                 'royalty_fee_log_monthly_value_out' => $newOut,
                 'royalty_fee_log_monthly_balance'   => $balance,
                 'royalty_fee_log_monthly_status'    => ($unpaid > 0) ? 'unpaid' : 'paid',
+                'royalty_fee_log_monthly_min'       => $min,
             ]);
 
         if ($this->db->affectedRows() < 0) {
@@ -334,7 +390,7 @@ class Royalty
     /**
      * Process monthly royalty adjustment (Cron job)
      */
-    public function processAdjustment(?BaseConnection $db = null): string
+    public function processAdjustment(?BaseConnection $db = null, ?int $customMinRoyalty = null): string
     {
         $db = $db ?? $this->db;
 
@@ -348,7 +404,7 @@ class Royalty
             $lastMonthNum       = date('m', strtotime($lastMonth));
             $lastMonthFormatted = Time::parse($lastMonth)->toLocalizedString('MMMM');
             $lastYear           = date('Y', strtotime($lastMonth));
-            $min                = $this->minRoyalty;
+            $min                = $this->resolveMinimumRoyalty($lastMonth, $customMinRoyalty);
 
             $royalty = $db->table('report_royalty_fee_log')
                 ->selectSum('royalty_fee_log_value')
@@ -419,23 +475,24 @@ class Royalty
                 ->getRow();
 
             if (!$check) {
-                $balance = $db->table('report_royalty_fee_log_monthly')
+                $currentMonthMin = $this->resolveMinimumRoyalty($this->date, $customMinRoyalty);
+                $balance         = $db->table('report_royalty_fee_log_monthly')
                     ->select('royalty_fee_log_monthly_balance')
                     ->orderBy('royalty_fee_log_monthly_year_month', 'desc')
                     ->get()
                     ->getRow('royalty_fee_log_monthly_balance') ?? 0;
 
                 $dataInsert = [
-                    'royalty_fee_log_monthly_balance'    => $balance - $min,
+                    'royalty_fee_log_monthly_balance'    => $balance - $currentMonthMin,
                     'royalty_fee_log_monthly_year_month' => $this->date,
                     'royalty_fee_log_monthly_value_out'  => 0,
-                    'royalty_fee_log_monthly_min'        => $min,
-                    'royalty_fee_log_monthly_bill'       => $min,
+                    'royalty_fee_log_monthly_min'        => $currentMonthMin,
+                    'royalty_fee_log_monthly_bill'       => $currentMonthMin,
                 ];
 
                 $dataInsert['royalty_fee_log_monthly_paid']   = $balance > 0 ? ($dataInsert['royalty_fee_log_monthly_balance'] >= 0 ? $dataInsert['royalty_fee_log_monthly_bill'] : $balance) : 0;
                 $dataInsert['royalty_fee_log_monthly_unpaid'] = $dataInsert['royalty_fee_log_monthly_bill'] - $dataInsert['royalty_fee_log_monthly_paid'];
-                $dataInsert['royalty_fee_log_monthly_status'] = $dataInsert['royalty_fee_log_monthly_bill'] == $dataInsert['royalty_fee_log_monthly_paid'] ? 'paid' : 'unpaid';
+                $dataInsert['royalty_fee_log_monthly_status'] = $dataInsert['royalty_fee_log_monthly_paid'] >= $dataInsert['royalty_fee_log_monthly_bill'] ? 'paid' : 'unpaid';
 
                 $db->table('report_royalty_fee_log_monthly')->insert($dataInsert);
 
@@ -461,9 +518,9 @@ class Royalty
     /**
      * Snake_case alias for processAdjustment
      */
-    public function royalty_adjustment(?BaseConnection $db = null): string
+    public function royalty_adjustment(?BaseConnection $db = null, ?int $customMinRoyalty = null): string
     {
-        return $this->processAdjustment($db);
+        return $this->processAdjustment($db, $customMinRoyalty);
     }
 
     /**
