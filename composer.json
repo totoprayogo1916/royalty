@@ -38,6 +38,8 @@
         "optimize-autoloader": true,
         "preferred-install": "dist",
         "sort-packages": true,
-        "audit": false
+        "audit": {
+            "security": true
+        }
     }
 }
