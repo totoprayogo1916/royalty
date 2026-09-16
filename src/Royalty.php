@@ -80,14 +80,14 @@ class Royalty
                 throw new RoyaltyException('Gagal update royalty fee.', 1);
             }
 
-            $balance = $this->db->table('report_royalty_fee_log_monthly')
+            $sqlBalance = $this->db->table('report_royalty_fee_log_monthly')
                 ->select('royalty_fee_log_monthly_balance')
                 ->orderBy('royalty_fee_log_monthly_year_month', 'desc')
-                ->forUpdate()
-                ->get()
-                ->getRow('royalty_fee_log_monthly_balance') ?? 0;
+                ->getCompiledSelect() . ' FOR UPDATE';
 
-            $log = $this->db->table('report_royalty_fee_log_monthly')
+            $balance = $this->db->query($sqlBalance)->getRow('royalty_fee_log_monthly_balance') ?? 0;
+
+            $sqlLog = $this->db->table('report_royalty_fee_log_monthly')
                 ->select('
                     royalty_fee_log_monthly_id,
                     royalty_fee_log_monthly_bill,
@@ -96,9 +96,9 @@ class Royalty
                     royalty_fee_log_monthly_unpaid,
                     royalty_fee_log_monthly_balance')
                 ->where("MONTH(royalty_fee_log_monthly_year_month) = {$this->month} AND YEAR(royalty_fee_log_monthly_year_month) = {$this->year}")
-                ->forUpdate()
-                ->get()
-                ->getRow();
+                ->getCompiledSelect() . ' FOR UPDATE';
+
+            $log = $this->db->query($sqlLog)->getRow();
 
             if ($log) {
                 $this->updateMonthlyLog($royalty, $balance, $log);
@@ -212,12 +212,12 @@ class Royalty
                 $month = date('m', strtotime($date));
                 $year  = date('Y', strtotime($date));
 
-                $logRow = $this->db->table('report_royalty_fee_log_monthly')
+                $sqlLogRow = $this->db->table('report_royalty_fee_log_monthly')
                     ->select('royalty_fee_log_monthly_id')
                     ->where("MONTH(royalty_fee_log_monthly_year_month) = {$month} AND YEAR(royalty_fee_log_monthly_year_month) = {$year}")
-                    ->forUpdate()
-                    ->get()
-                    ->getRow();
+                    ->getCompiledSelect() . ' FOR UPDATE';
+
+                $logRow = $this->db->query($sqlLogRow)->getRow();
 
                 if ($logRow) {
                     $logId = (int) $logRow->royalty_fee_log_monthly_id;
@@ -227,12 +227,12 @@ class Royalty
                 }
             }
 
-            $log = $this->db->table('report_royalty_fee_log_monthly')
+            $sqlLog = $this->db->table('report_royalty_fee_log_monthly')
                 ->select('royalty_fee_log_monthly_id, royalty_fee_log_monthly_bill, royalty_fee_log_monthly_paid, royalty_fee_log_monthly_value_out, royalty_fee_log_monthly_balance, royalty_fee_log_monthly_value_in, royalty_fee_log_monthly_status')
                 ->where('royalty_fee_log_monthly_id', $logId)
-                ->forUpdate()
-                ->get()
-                ->getRow();
+                ->getCompiledSelect() . ' FOR UPDATE';
+
+            $log = $this->db->query($sqlLog)->getRow();
 
             if (!$log) {
                 throw new RoyaltyNotFoundException('Data log monthly tidak ditemukan.', 1);

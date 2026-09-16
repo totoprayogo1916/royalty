@@ -49,11 +49,12 @@ class RoyaltyTest extends TestCase
         $builderMock->method('update')->willReturn(true);
         $builderMock->method('select')->willReturnSelf();
         $builderMock->method('orderBy')->willReturnSelf();
-        $builderMock->method('forUpdate')->willReturnSelf();
+        $builderMock->method('getCompiledSelect')->willReturn('SELECT * FROM report_royalty_fee_log_monthly');
         $builderMock->method('get')->willReturn($resultMock);
         $builderMock->method('insert')->willReturn(true);
 
         $dbMock->method('table')->willReturn($builderMock);
+        $dbMock->method('query')->willReturn($resultMock);
         $dbMock->method('affectedRows')->willReturn(1);
         $dbMock->method('insertID')->willReturn(10);
 

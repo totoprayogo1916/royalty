@@ -32,7 +32,7 @@ class RoyaltyTopUpTest extends TestCase
 
         $builderMock->method('select')->willReturnSelf();
         $builderMock->method('where')->willReturnSelf();
-        $builderMock->method('forUpdate')->willReturnSelf();
+        $builderMock->method('getCompiledSelect')->willReturn('SELECT * FROM report_royalty_fee_log_monthly');
         $builderMock->method('get')->willReturn($resultMock);
         $builderMock->method('getWhere')->willReturn($resultMock);
         $builderMock->method('set')->willReturnSelf();
@@ -40,6 +40,7 @@ class RoyaltyTopUpTest extends TestCase
         $builderMock->method('insert')->willReturn(true);
 
         $dbMock->method('table')->willReturn($builderMock);
+        $dbMock->method('query')->willReturn($resultMock);
         $dbMock->method('affectedRows')->willReturn(1);
 
         $royalty = new Royalty($dbMock, 500000);
