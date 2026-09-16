@@ -16,9 +16,9 @@ class CreateTableReportRoyaltyFeeLog extends Migration
                 'auto_increment' => true,
             ],
             'royalty_fee_log_value' => [
-                'type'       => 'INT',
-                'constraint' => 10,
-                'unsigned'   => true,
+                'type'       => 'BIGINT',
+                'constraint' => 20,
+                'unsigned'   => false,
                 'default'    => 0,
                 'comment'    => 'Nilai Royalti',
             ],

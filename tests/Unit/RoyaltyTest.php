@@ -38,7 +38,7 @@ class RoyaltyTest extends TestCase
 
     public function testSnakeCaseAliasesCallCamelCaseMethods()
     {
-        $dbMock     = $this->createMock(BaseConnection::class);
+        $dbMock      = $this->createMock(BaseConnection::class);
         $builderMock = $this->createMock(BaseBuilder::class);
         $resultMock  = $this->createMock(ResultInterface::class);
 
@@ -49,6 +49,7 @@ class RoyaltyTest extends TestCase
         $builderMock->method('update')->willReturn(true);
         $builderMock->method('select')->willReturnSelf();
         $builderMock->method('orderBy')->willReturnSelf();
+        $builderMock->method('forUpdate')->willReturnSelf();
         $builderMock->method('get')->willReturn($resultMock);
         $builderMock->method('insert')->willReturn(true);
 

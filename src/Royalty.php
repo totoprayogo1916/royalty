@@ -3,10 +3,13 @@
 namespace Esoftdream\Royalty;
 
 use CodeIgniter\Database\BaseConnection;
+use CodeIgniter\Events\Events;
 use CodeIgniter\I18n\Time;
 use Config\Database;
 use Esoftdream\Royalty\Config\Royalty as RoyaltyConfig;
-use Exception;
+use Esoftdream\Royalty\Exceptions\InvalidArgumentException;
+use Esoftdream\Royalty\Exceptions\RoyaltyException;
+use Esoftdream\Royalty\Exceptions\RoyaltyNotFoundException;
 use Throwable;
 
 class Royalty
@@ -21,8 +24,11 @@ class Royalty
     public function __construct(?BaseConnection $db = null, ?int $minRoyalty = null)
     {
         $this->db = $db ?? Database::connect();
-        
+
         if ($minRoyalty !== null) {
+            if ($minRoyalty < 0) {
+                throw new InvalidArgumentException('Minimum royalty fee tidak boleh negatif.');
+            }
             $this->minRoyalty = $minRoyalty;
         } else {
             $config = new RoyaltyConfig();
@@ -40,6 +46,10 @@ class Royalty
      */
     public function init(string $datetime): self
     {
+        if (strtotime($datetime) === false) {
+            throw new InvalidArgumentException("Format datetime tidak valid: {$datetime}");
+        }
+
         $this->datetime = $datetime;
         $this->date     = date('Y-m-d', strtotime($datetime));
         $this->month    = date('m', strtotime($datetime));
@@ -53,40 +63,63 @@ class Royalty
      */
     public function updateRoyalty(int|float $royalty): bool|int
     {
-        $this->db->table('report_royalty_fee')
-            ->set('royalty_fee_acc', 'royalty_fee_acc + ' . (int) $royalty, false)
-            ->set('royalty_fee_last_updated_datetime', $this->datetime)
-            ->where('royalty_fee_id', 1)
-            ->update();
-
-        if ($this->db->affectedRows() < 0) {
-            throw new Exception('Gagal update royalty fee.', 1);
+        if ($royalty < 0) {
+            throw new InvalidArgumentException('Nominal royalty fee tidak boleh negatif.');
         }
 
-        $balance = $this->db->table('report_royalty_fee_log_monthly')
-            ->select('royalty_fee_log_monthly_balance')
-            ->orderBy('royalty_fee_log_monthly_year_month', 'desc')
-            ->get()
-            ->getRow('royalty_fee_log_monthly_balance') ?? 0;
+        try {
+            $this->db->transBegin();
 
-        $log = $this->db->table('report_royalty_fee_log_monthly')
-            ->select('
-                royalty_fee_log_monthly_id,
-                royalty_fee_log_monthly_bill,
-                royalty_fee_log_monthly_paid,
-                royalty_fee_log_monthly_value_out,
-                royalty_fee_log_monthly_unpaid,
-                royalty_fee_log_monthly_balance')
-            ->where("MONTH(royalty_fee_log_monthly_year_month) = {$this->month} AND YEAR(royalty_fee_log_monthly_year_month) = {$this->year}")
-            ->get()
-            ->getRow();
+            $this->db->table('report_royalty_fee')
+                ->set('royalty_fee_acc', 'royalty_fee_acc + ' . (int) $royalty, false)
+                ->set('royalty_fee_last_updated_datetime', $this->datetime)
+                ->where('royalty_fee_id', 1)
+                ->update();
 
-        if ($log) {
-            $this->updateMonthlyLog($royalty, $balance, $log);
-            return true;
+            if ($this->db->affectedRows() < 0) {
+                throw new RoyaltyException('Gagal update royalty fee.', 1);
+            }
+
+            $balance = $this->db->table('report_royalty_fee_log_monthly')
+                ->select('royalty_fee_log_monthly_balance')
+                ->orderBy('royalty_fee_log_monthly_year_month', 'desc')
+                ->forUpdate()
+                ->get()
+                ->getRow('royalty_fee_log_monthly_balance') ?? 0;
+
+            $log = $this->db->table('report_royalty_fee_log_monthly')
+                ->select('
+                    royalty_fee_log_monthly_id,
+                    royalty_fee_log_monthly_bill,
+                    royalty_fee_log_monthly_paid,
+                    royalty_fee_log_monthly_value_out,
+                    royalty_fee_log_monthly_unpaid,
+                    royalty_fee_log_monthly_balance')
+                ->where("MONTH(royalty_fee_log_monthly_year_month) = {$this->month} AND YEAR(royalty_fee_log_monthly_year_month) = {$this->year}")
+                ->forUpdate()
+                ->get()
+                ->getRow();
+
+            if ($log) {
+                $this->updateMonthlyLog($royalty, $balance, $log);
+                $this->db->transCommit();
+
+                $this->triggerEvent('royalty_updated', ['amount' => $royalty, 'datetime' => $this->datetime]);
+                return true;
+            }
+
+            $insertId = $this->insertMonthlyLog($royalty, $balance);
+            $this->db->transCommit();
+
+            $this->triggerEvent('royalty_updated', ['amount' => $royalty, 'datetime' => $this->datetime, 'log_id' => $insertId]);
+            return $insertId;
+        } catch (Throwable $th) {
+            $this->db->transRollback();
+            if ($th instanceof RoyaltyException) {
+                throw $th;
+            }
+            throw new RoyaltyException($th->getMessage(), (int) $th->getCode(), $th);
         }
-
-        return $this->insertMonthlyLog($royalty, $balance);
     }
 
     /**
@@ -114,7 +147,7 @@ class Royalty
         $this->db->table('report_royalty_fee_log_monthly')->insert($dataInsert);
 
         if ($this->db->affectedRows() <= 0) {
-            throw new Exception('Gagal tambah royalty monthly', 1);
+            throw new RoyaltyException('Gagal tambah royalty monthly', 1);
         }
 
         return (int) $this->db->insertID();
@@ -153,104 +186,147 @@ class Royalty
             ]);
 
         if ($this->db->affectedRows() < 0) {
-            throw new Exception('Gagal ubah royalty monthly', 1);
+            throw new RoyaltyException('Gagal ubah royalty monthly', 1);
         }
     }
 
     /**
      * Top-up deposit royalty
      */
-    public function topUp(int|float $topUp, string $date, int $logId, string $note = '', ?int $adminId = null): bool
+    public function topUp(int|float $topUp, string $date, ?int $logId = null, string $note = '', ?int $adminId = null): bool
     {
-        $this->date = $date;
-        $log        = $this->db->table('report_royalty_fee_log_monthly')
-            ->select('royalty_fee_log_monthly_id, royalty_fee_log_monthly_bill, royalty_fee_log_monthly_paid, royalty_fee_log_monthly_value_out, royalty_fee_log_monthly_balance, royalty_fee_log_monthly_value_in, royalty_fee_log_monthly_status')
-            ->where('royalty_fee_log_monthly_id', $logId)
-            ->get()
-            ->getRow();
-
-        if (!$log) {
-            throw new Exception('Data log monthly tidak ditemukan', 1);
+        if ($topUp <= 0) {
+            throw new InvalidArgumentException('Nominal top-up harus lebih besar dari 0.');
         }
 
-        $balance    = $topUp;
-        $listUnpaid = $this->db->table('report_royalty_fee_log_monthly')
-            ->getWhere(['royalty_fee_log_monthly_status' => 'unpaid'])
-            ->getResult();
+        if (strtotime($date) === false) {
+            throw new InvalidArgumentException("Format tanggal tidak valid: {$date}");
+        }
 
-        if (count($listUnpaid) > 0) {
-            foreach ($listUnpaid as $value) {
-                if ($balance <= 0) {
-                    $balance -= ($value->royalty_fee_log_monthly_bill - $value->royalty_fee_log_monthly_paid);
+        try {
+            $this->db->transBegin();
+
+            $this->date = $date;
+
+            if ($logId === null) {
+                $month = date('m', strtotime($date));
+                $year  = date('Y', strtotime($date));
+
+                $logRow = $this->db->table('report_royalty_fee_log_monthly')
+                    ->select('royalty_fee_log_monthly_id')
+                    ->where("MONTH(royalty_fee_log_monthly_year_month) = {$month} AND YEAR(royalty_fee_log_monthly_year_month) = {$year}")
+                    ->forUpdate()
+                    ->get()
+                    ->getRow();
+
+                if ($logRow) {
+                    $logId = (int) $logRow->royalty_fee_log_monthly_id;
                 } else {
-                    $paidNew   = ($value->royalty_fee_log_monthly_paid + $balance) > $value->royalty_fee_log_monthly_bill ? $value->royalty_fee_log_monthly_bill : $value->royalty_fee_log_monthly_paid + $balance;
-                    $unpaidNew = ($value->royalty_fee_log_monthly_paid + $balance) > $value->royalty_fee_log_monthly_bill ? 0 : ($value->royalty_fee_log_monthly_unpaid - $balance);
-                    $statusNew = ($value->royalty_fee_log_monthly_paid + $balance) >= $value->royalty_fee_log_monthly_bill ? 'paid' : 'unpaid';
-
-                    $this->db->table('report_royalty_fee_log_monthly')
-                        ->where('royalty_fee_log_monthly_id', $value->royalty_fee_log_monthly_id)
-                        ->update([
-                            'royalty_fee_log_monthly_paid'   => $paidNew,
-                            'royalty_fee_log_monthly_unpaid' => $unpaidNew,
-                            'royalty_fee_log_monthly_status' => $statusNew,
-                        ]);
-
-                    if ($this->db->affectedRows() < 0) {
-                        throw new Exception('Gagal ubah royalty monthly', 1);
-                    }
-
-                    $balance -= ($value->royalty_fee_log_monthly_bill - $value->royalty_fee_log_monthly_paid);
+                    $this->init($date);
+                    $logId = (int) $this->updateRoyalty(0);
                 }
             }
-        }
 
-        $lastRow = $this->db->table('report_royalty_fee_log_monthly')->get()->getLastRow();
+            $log = $this->db->table('report_royalty_fee_log_monthly')
+                ->select('royalty_fee_log_monthly_id, royalty_fee_log_monthly_bill, royalty_fee_log_monthly_paid, royalty_fee_log_monthly_value_out, royalty_fee_log_monthly_balance, royalty_fee_log_monthly_value_in, royalty_fee_log_monthly_status')
+                ->where('royalty_fee_log_monthly_id', $logId)
+                ->forUpdate()
+                ->get()
+                ->getRow();
 
-        $this->db->table('report_royalty_fee_log_monthly')
-            ->where('royalty_fee_log_monthly_id', $logId)
-            ->update([
-                'royalty_fee_log_monthly_value_in' => $log->royalty_fee_log_monthly_value_in + $topUp,
-            ]);
+            if (!$log) {
+                throw new RoyaltyNotFoundException('Data log monthly tidak ditemukan.', 1);
+            }
 
-        if ($this->db->affectedRows() < 0) {
-            throw new Exception('Gagal ubah royalty monthly', 1);
-        }
+            $balance    = $topUp;
+            $listUnpaid = $this->db->table('report_royalty_fee_log_monthly')
+                ->getWhere(['royalty_fee_log_monthly_status' => 'unpaid'])
+                ->getResult();
 
-        if ($lastRow) {
+            if (count($listUnpaid) > 0) {
+                foreach ($listUnpaid as $value) {
+                    if ($balance <= 0) {
+                        $balance -= ($value->royalty_fee_log_monthly_bill - $value->royalty_fee_log_monthly_paid);
+                    } else {
+                        $paidNew   = ($value->royalty_fee_log_monthly_paid + $balance) > $value->royalty_fee_log_monthly_bill ? $value->royalty_fee_log_monthly_bill : $value->royalty_fee_log_monthly_paid + $balance;
+                        $unpaidNew = ($value->royalty_fee_log_monthly_paid + $balance) > $value->royalty_fee_log_monthly_bill ? 0 : ($value->royalty_fee_log_monthly_unpaid - $balance);
+                        $statusNew = ($value->royalty_fee_log_monthly_paid + $balance) >= $value->royalty_fee_log_monthly_bill ? 'paid' : 'unpaid';
+
+                        $this->db->table('report_royalty_fee_log_monthly')
+                            ->where('royalty_fee_log_monthly_id', $value->royalty_fee_log_monthly_id)
+                            ->update([
+                                'royalty_fee_log_monthly_paid'   => $paidNew,
+                                'royalty_fee_log_monthly_unpaid' => $unpaidNew,
+                                'royalty_fee_log_monthly_status' => $statusNew,
+                            ]);
+
+                        if ($this->db->affectedRows() < 0) {
+                            throw new RoyaltyException('Gagal ubah royalty monthly', 1);
+                        }
+
+                        $balance -= ($value->royalty_fee_log_monthly_bill - $value->royalty_fee_log_monthly_paid);
+                    }
+                }
+            }
+
+            $lastRow = $this->db->table('report_royalty_fee_log_monthly')->get()->getLastRow();
+
             $this->db->table('report_royalty_fee_log_monthly')
-                ->where('royalty_fee_log_monthly_id', $lastRow->royalty_fee_log_monthly_id)
+                ->where('royalty_fee_log_monthly_id', $logId)
                 ->update([
-                    'royalty_fee_log_monthly_balance' => $balance,
+                    'royalty_fee_log_monthly_value_in' => $log->royalty_fee_log_monthly_value_in + $topUp,
                 ]);
 
             if ($this->db->affectedRows() < 0) {
-                throw new Exception('Gagal ubah royalty monthly', 1);
+                throw new RoyaltyException('Gagal ubah royalty monthly', 1);
             }
+
+            if ($lastRow) {
+                $this->db->table('report_royalty_fee_log_monthly')
+                    ->where('royalty_fee_log_monthly_id', $lastRow->royalty_fee_log_monthly_id)
+                    ->update([
+                        'royalty_fee_log_monthly_balance' => $balance,
+                    ]);
+
+                if ($this->db->affectedRows() < 0) {
+                    throw new RoyaltyException('Gagal ubah royalty monthly', 1);
+                }
+            }
+
+            // Record in summary table
+            $this->db->table('report_royalty_fee')
+                ->set('royalty_fee_paid', "royalty_fee_paid+{$topUp}", false)
+                ->set('royalty_fee_last_updated_datetime', $date)
+                ->where('royalty_fee_id', 1)
+                ->update();
+
+            // Record in detail log table
+            $this->db->table('report_royalty_fee_log')->insert([
+                'royalty_fee_log_value'                  => $topUp,
+                'royalty_fee_log_type'                   => 'in',
+                'royalty_fee_log_note'                   => $note,
+                'royalty_fee_log_input_datetime'         => $date,
+                'royalty_fee_log_input_administrator_id' => $adminId,
+            ]);
+
+            $this->db->transCommit();
+
+            $this->triggerEvent('royalty_topup', ['amount' => $topUp, 'date' => $date, 'note' => $note, 'admin_id' => $adminId]);
+
+            return true;
+        } catch (Throwable $th) {
+            $this->db->transRollback();
+            if ($th instanceof RoyaltyException) {
+                throw $th;
+            }
+            throw new RoyaltyException($th->getMessage(), (int) $th->getCode(), $th);
         }
-
-        // Record in summary table
-        $this->db->table('report_royalty_fee')
-            ->set('royalty_fee_paid', "royalty_fee_paid+{$topUp}", false)
-            ->set('royalty_fee_last_updated_datetime', $date)
-            ->where('royalty_fee_id', 1)
-            ->update();
-
-        // Record in detail log table
-        $this->db->table('report_royalty_fee_log')->insert([
-            'royalty_fee_log_value'                  => $topUp,
-            'royalty_fee_log_type'                   => 'in',
-            'royalty_fee_log_note'                   => $note,
-            'royalty_fee_log_input_datetime'         => $date,
-            'royalty_fee_log_input_administrator_id' => $adminId,
-        ]);
-
-        return true;
     }
 
     /**
      * Snake_case alias for topUp
      */
-    public function top_up(int|float $topUp, string $date, int $logId, string $note = '', ?int $adminId = null): bool
+    public function top_up(int|float $topUp, string $date, ?int $logId = null, string $note = '', ?int $adminId = null): bool
     {
         return $this->topUp($topUp, $date, $logId, $note, $adminId);
     }
@@ -289,7 +365,7 @@ class Royalty
                     ->update();
 
                 if ($db->affectedRows() <= 0) {
-                    throw new Exception('Gagal ubah royalty', 1);
+                    throw new RoyaltyException('Gagal ubah royalty', 1);
                 }
 
                 $db->table('report_royalty_fee_log')->insert([
@@ -301,7 +377,7 @@ class Royalty
                 ]);
 
                 if ($db->affectedRows() <= 0) {
-                    throw new Exception('Gagal tambah riwayat royalty', 1);
+                    throw new RoyaltyException('Gagal tambah riwayat royalty', 1);
                 }
             } else {
                 $lastRoyalty = $db->table('report_royalty_fee_log_monthly')
@@ -319,7 +395,7 @@ class Royalty
                     ->update();
 
                 if ($db->affectedRows() <= 0) {
-                    throw new Exception('Gagal ubah royalty', 1);
+                    throw new RoyaltyException('Gagal ubah royalty', 1);
                 }
 
                 $db->table('report_royalty_fee_log')->insert([
@@ -331,7 +407,7 @@ class Royalty
                 ]);
 
                 if ($db->affectedRows() <= 0) {
-                    throw new Exception('Gagal tambah riwayat royalty', 1);
+                    throw new RoyaltyException('Gagal tambah riwayat royalty', 1);
                 }
             }
 
@@ -364,16 +440,21 @@ class Royalty
                 $db->table('report_royalty_fee_log_monthly')->insert($dataInsert);
 
                 if ($db->affectedRows() <= 0) {
-                    throw new Exception('Gagal tambah royalty monthly', 1);
+                    throw new RoyaltyException('Gagal tambah royalty monthly', 1);
                 }
             }
 
             $db->transCommit();
 
+            $this->triggerEvent('royalty_adjusted', ['date' => $this->date, 'min_royalty' => $min]);
+
             return 'Penyesuaian royalty IT berhasil.';
         } catch (Throwable $th) {
             $db->transRollback();
-            throw new Exception($th->getMessage(), (int) $th->getCode(), $th);
+            if ($th instanceof RoyaltyException) {
+                throw $th;
+            }
+            throw new RoyaltyException($th->getMessage(), (int) $th->getCode(), $th);
         }
     }
 
@@ -383,5 +464,15 @@ class Royalty
     public function royalty_adjustment(?BaseConnection $db = null): string
     {
         return $this->processAdjustment($db);
+    }
+
+    /**
+     * Trigger CodeIgniter Event safely if available
+     */
+    private function triggerEvent(string $eventName, array $data): void
+    {
+        if (class_exists(Events::class)) {
+            Events::trigger($eventName, $data);
+        }
     }
 }
